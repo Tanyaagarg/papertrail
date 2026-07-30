@@ -3,3 +3,6 @@ uvicorn[standard]
 httpx
 pymongo
 python-dotenv
+beautifulsoup4
+sentence-transformers
+qdrant-client
