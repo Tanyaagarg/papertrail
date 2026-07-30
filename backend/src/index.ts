@@ -1,24 +1,131 @@
 import express from "express";
+import { prisma } from "./lib/prisma";
 
-// Create the Express app — this is our "kitchen" that handles requests.
 const app = express();
-
-// The door number the server listens on. 4000 keeps it clear of the
-// frontend, which will later use 3000.
 const PORT = process.env.PORT || 4000;
 
-// A "health check" endpoint. Visiting /health tells us the server is alive.
-// Tools and other services will knock here to check we're okay.
+app.use(express.json());
+
+// Health check — is the server alive?
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "papertrail-backend" });
 });
 
-// The home door. Visiting / shows a friendly hello.
+// Home — friendly hello.
 app.get("/", (_req, res) => {
   res.send("PaperTrail backend is alive! 🐾");
 });
 
-// Start listening. Once running, it prints the address in the terminal.
+// CREATE a user: POST /users  with body { "email": "..." }
+app.post("/users", async (req, res) => {
+  const { email } = req.body;
+
+  if (!email || typeof email !== "string") {
+    return res.status(400).json({ error: "email (string) is required" });
+  }
+
+  try {
+    const user = await prisma.user.create({ data: { email } });
+    return res.status(201).json(user);
+  } catch (err) {
+    return res
+      .status(409)
+      .json({ error: "Could not create user — email may already exist" });
+  }
+});
+
+// LIST all users: GET /users
+app.get("/users", async (_req, res) => {
+  const users = await prisma.user.findMany();
+  return res.json(users);
+});
+
+// CREATE a watched source for a user:
+// POST /users/:userId/sources  with body { "url": "...", "label": "..." }
+app.post("/users/:userId/sources", async (req, res) => {
+  const userId = Number(req.params.userId);
+  const { url, label } = req.body;
+
+  if (Number.isNaN(userId)) {
+    return res.status(400).json({ error: "userId must be a number" });
+  }
+  if (!url || typeof url !== "string" || !label || typeof label !== "string") {
+    return res
+      .status(400)
+      .json({ error: "url (string) and label (string) are required" });
+  }
+
+  try {
+    const source = await prisma.watchedSource.create({
+      data: { url, label, userId },
+    });
+    return res.status(201).json(source);
+  } catch (err) {
+    return res
+      .status(400)
+      .json({ error: "Could not create source — does that user exist?" });
+  }
+});
+
+// LIST a user's watched sources: GET /users/:userId/sources
+app.get("/users/:userId/sources", async (req, res) => {
+  const userId = Number(req.params.userId);
+
+  if (Number.isNaN(userId)) {
+    return res.status(400).json({ error: "userId must be a number" });
+  }
+
+  const sources = await prisma.watchedSource.findMany({
+    where: { userId },
+  });
+  return res.json(sources);
+});
+
+// SET (create or replace) a user's profile:
+// PUT /users/:userId/profile  with body { "description": "..." }
+app.put("/users/:userId/profile", async (req, res) => {
+  const userId = Number(req.params.userId);
+  const { description } = req.body;
+
+  if (Number.isNaN(userId)) {
+    return res.status(400).json({ error: "userId must be a number" });
+  }
+  if (!description || typeof description !== "string") {
+    return res.status(400).json({ error: "description (string) is required" });
+  }
+
+  try {
+    const profile = await prisma.profile.upsert({
+      where: { userId },
+      update: { description },
+      create: { description, userId },
+    });
+    return res.json(profile);
+  } catch (err) {
+    return res
+      .status(400)
+      .json({ error: "Could not save profile — does that user exist?" });
+  }
+});
+
+// GET a user's profile: GET /users/:userId/profile
+app.get("/users/:userId/profile", async (req, res) => {
+  const userId = Number(req.params.userId);
+
+  if (Number.isNaN(userId)) {
+    return res.status(400).json({ error: "userId must be a number" });
+  }
+
+  const profile = await prisma.profile.findUnique({
+    where: { userId },
+  });
+
+  if (!profile) {
+    return res.status(404).json({ error: "No profile yet for this user" });
+  }
+  return res.json(profile);
+});
+
 app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
 });
