@@ -10,5 +10,18 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
 
+  mongo:
+    image: mongo:7
+    container_name: papertrail-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_data:/data/db
+
 volumes:
   mysql_data:
+  mongo_data:
