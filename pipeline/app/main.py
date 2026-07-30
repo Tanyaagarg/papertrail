@@ -6,6 +6,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from app.db import snapshots
+from app.explain import explain_changes
 
 app = FastAPI(title="PaperTrail Pipeline")
 
@@ -168,4 +169,35 @@ def semantic_diff(payload: DiffRequest):
         "previous_snapshot": previous_id,
         "added_or_changed": added,
         "removed": removed,
+    }
+
+
+class ExplainRequest(BaseModel):
+    url: str
+    profile: str | None = None
+
+
+@app.post("/explain")
+def explain(payload: ExplainRequest):
+    recent = list(
+        snapshots.find({"url": payload.url}).sort("fetched_at", -1).limit(2)
+    )
+    if len(recent) < 2:
+        return {
+            "url": payload.url,
+            "message": "Need at least two snapshots to compare.",
+            "explanation": None,
+        }
+
+    current_id = str(recent[0]["_id"])
+    previous_id = str(recent[1]["_id"])
+    added, removed = compute_diff(current_id, previous_id)
+
+    explanation = explain_changes(payload.url, payload.profile, added, removed)
+
+    return {
+        "url": payload.url,
+        "added_or_changed": added,
+        "removed": removed,
+        "explanation": explanation,
     }
