@@ -7,9 +7,17 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from app.db import snapshots
 from app.explain import explain_changes
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="PaperTrail Pipeline")
 
+# Let the Next.js dashboard (port 3000) call this pipeline.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Describes the data we expect when someone asks us to snapshot a page.
 class SnapshotRequest(BaseModel):

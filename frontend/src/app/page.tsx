@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const PIPELINE_URL = process.env.NEXT_PUBLIC_PIPELINE_URL ?? "http://localhost:8000";
 const USER_ID = 1;
 
 type Source = {
@@ -12,10 +13,19 @@ type Source = {
   createdAt: string;
 };
 
+// The result of checking one page for changes.
+type CheckResult = {
+  loading?: boolean;
+  error?: string;
+  explanation?: string | null;
+  message?: string;
+};
+
 export default function Home() {
   const [sources, setSources] = useState<Source[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [profile, setProfile] = useState<string>("");
 
   // Form state
   const [label, setLabel] = useState("");
@@ -23,7 +33,9 @@ export default function Home() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Load the user's pages from the backend.
+  // Per-card check results, keyed by source id.
+  const [checks, setChecks] = useState<Record<number, CheckResult>>({});
+
   async function loadSources() {
     try {
       const res = await fetch(`${API_URL}/users/${USER_ID}/sources`);
@@ -37,13 +49,25 @@ export default function Home() {
     }
   }
 
+  async function loadProfile() {
+    try {
+      const res = await fetch(`${API_URL}/users/${USER_ID}/profile`);
+      if (res.ok) {
+        const data = await res.json();
+        setProfile(data.description ?? "");
+      }
+    } catch {
+      // No profile yet — that's fine.
+    }
+  }
+
   useEffect(() => {
     loadSources();
+    loadProfile();
   }, []);
 
-  // Handle the "Add page" form submit.
   async function handleAdd(e: React.FormEvent) {
-    e.preventDefault(); // stop the browser from reloading the page
+    e.preventDefault();
     if (!label.trim() || !url.trim()) {
       setFormError("Please fill in both a label and a URL.");
       return;
@@ -59,11 +83,49 @@ export default function Home() {
       if (!res.ok) throw new Error("Bad response");
       setLabel("");
       setUrl("");
-      await loadSources(); // refresh the list so the new card appears
+      await loadSources();
     } catch {
       setFormError("Could not add that page. Please try again.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Take a fresh snapshot, then ask the pipeline to explain any changes.
+  async function handleCheck(source: Source) {
+    setChecks((c) => ({ ...c, [source.id]: { loading: true } }));
+    try {
+      // 1) Snapshot the page now (captures the current version).
+      await fetch(`${PIPELINE_URL}/snapshots`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: source.url }),
+      });
+
+      // 2) Ask for a personalized explanation of what changed.
+      const res = await fetch(`${PIPELINE_URL}/explain`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: source.url, profile }),
+      });
+      const data = await res.json();
+
+      setChecks((c) => ({
+        ...c,
+        [source.id]: {
+          loading: false,
+          explanation: data.explanation,
+          message: data.message,
+        },
+      }));
+    } catch {
+      setChecks((c) => ({
+        ...c,
+        [source.id]: {
+          loading: false,
+          error: "Check failed. Are the pipeline and Docker running?",
+        },
+      }));
     }
   }
 
@@ -74,9 +136,7 @@ export default function Home() {
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-2">
             <span className="text-2xl">🐾</span>
-            <span className="text-lg font-semibold tracking-tight">
-              PaperTrail
-            </span>
+            <span className="text-lg font-semibold tracking-tight">PaperTrail</span>
           </div>
           <span className="hidden text-sm text-slate-500 sm:block">
             Watching your fine print
@@ -98,9 +158,7 @@ export default function Home() {
           onSubmit={handleAdd}
           className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
         >
-          <h2 className="mb-3 text-sm font-medium text-slate-700">
-            Watch a new page
-          </h2>
+          <h2 className="mb-3 text-sm font-medium text-slate-700">Watch a new page</h2>
           <div className="flex flex-col gap-3 sm:flex-row">
             <input
               value={label}
@@ -122,9 +180,7 @@ export default function Home() {
               {submitting ? "Adding…" : "Add page"}
             </button>
           </div>
-          {formError && (
-            <p className="mt-3 text-sm text-red-600">{formError}</p>
-          )}
+          {formError && <p className="mt-3 text-sm text-red-600">{formError}</p>}
         </form>
       </section>
 
@@ -149,26 +205,45 @@ export default function Home() {
 
         {!loading && !error && sources.length > 0 && (
           <div className="grid gap-4 sm:grid-cols-2">
-            {sources.map((source) => (
-              <article
-                key={source.id}
-                className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <h3 className="font-semibold leading-snug">{source.label}</h3>
-                  <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-1 text-xs font-medium text-sky-700">
-                    <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
-                    Watching
-                  </span>
-                </div>
-                <p className="mt-1 truncate text-sm text-slate-500">
-                  {source.url}
-                </p>
-                <p className="mt-4 text-xs text-slate-400">
-                  Added {new Date(source.createdAt).toLocaleDateString()}
-                </p>
-              </article>
-            ))}
+            {sources.map((source) => {
+              const check = checks[source.id];
+              return (
+                <article
+                  key={source.id}
+                  className="flex flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="font-semibold leading-snug">{source.label}</h3>
+                    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-1 text-xs font-medium text-sky-700">
+                      <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+                      Watching
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate text-sm text-slate-500">{source.url}</p>
+                  <p className="mt-3 text-xs text-slate-400">
+                    Added {new Date(source.createdAt).toLocaleDateString()}
+                  </p>
+
+                  <button
+                    onClick={() => handleCheck(source)}
+                    disabled={check?.loading}
+                    className="mt-4 self-start rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-700 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {check?.loading ? "Checking…" : "Check for changes"}
+                  </button>
+
+                  {/* Result area */}
+                  {check?.error && (
+                    <p className="mt-3 text-sm text-red-600">{check.error}</p>
+                  )}
+                  {check && !check.loading && !check.error && (
+                    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm leading-relaxed text-slate-700 whitespace-pre-line">
+                      {check.explanation || check.message || "No meaningful changes detected."}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
           </div>
         )}
       </section>
