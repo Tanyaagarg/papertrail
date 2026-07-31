@@ -3,9 +3,11 @@ import express from "express";
 import { prisma } from "./lib/prisma";
 import { crawlQueue } from "./lib/queue";
 
+
 const app = express();
 app.use(cors());
 const PORT = process.env.PORT || 4000;
+const PIPELINE_URL = process.env.PIPELINE_URL ?? "http://localhost:8000";
 
 app.use(express.json());
 
@@ -43,8 +45,7 @@ app.get("/users", async (_req, res) => {
   return res.json(users);
 });
 
-// CREATE a watched source for a user:
-// POST /users/:userId/sources  with body { "url": "...", "label": "..." }
+// CREATE a watched source (no duplicate URL or label per user).
 app.post("/users/:userId/sources", async (req, res) => {
   const userId = Number(req.params.userId);
   const { url, label } = req.body;
@@ -56,6 +57,22 @@ app.post("/users/:userId/sources", async (req, res) => {
     return res
       .status(400)
       .json({ error: "url (string) and label (string) are required" });
+  }
+
+  // No duplicate URL for this user.
+  const dupUrl = await prisma.watchedSource.findFirst({ where: { userId, url } });
+  if (dupUrl) {
+    return res.status(409).json({ error: "You're already watching this URL." });
+  }
+
+  // No duplicate label for this user.
+  const dupLabel = await prisma.watchedSource.findFirst({
+    where: { userId, label },
+  });
+  if (dupLabel) {
+    return res
+      .status(409)
+      .json({ error: "You already have a page with that label." });
   }
 
   try {
@@ -150,4 +167,43 @@ app.post("/users/:userId/crawl", async (req, res) => {
   }
 
   return res.json({ queued: sources.length });
+});
+
+// DELETE a watched source, and wipe its snapshots/vectors so re-adding is fresh.
+app.delete("/users/:userId/sources/:sourceId", async (req, res) => {
+  const userId = Number(req.params.userId);
+  const sourceId = Number(req.params.sourceId);
+
+  if (Number.isNaN(userId) || Number.isNaN(sourceId)) {
+    return res.status(400).json({ error: "userId and sourceId must be numbers" });
+  }
+
+  // Find it first so we know its URL.
+  const source = await prisma.watchedSource.findFirst({
+    where: { id: sourceId, userId },
+  });
+  if (!source) {
+    return res.status(404).json({ error: "Source not found" });
+  }
+
+  // Remove it from the watch list (MySQL).
+  await prisma.watchedSource.delete({ where: { id: source.id } });
+
+  // If nobody else watches this exact URL, purge its snapshots + vectors too.
+  const stillUsed = await prisma.watchedSource.count({
+    where: { url: source.url },
+  });
+  if (stillUsed === 0) {
+    try {
+      await fetch(`${PIPELINE_URL}/purge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: source.url }),
+      });
+    } catch {
+      // best-effort: the watch list is already updated even if purge fails
+    }
+  }
+
+  return res.json({ deleted: 1 });
 });

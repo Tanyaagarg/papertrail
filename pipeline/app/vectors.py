@@ -102,3 +102,17 @@ def compute_diff(current_id: str, previous_id: str, threshold: float = 0.85):
             removed.append({"text": p.payload["text"], "closest_score": round(float(score), 3)})
 
     return added, removed
+
+from qdrant_client.models import FilterSelector
+
+
+def purge_url(url: str) -> None:
+    """Delete all clause-points for a given URL from Qdrant."""
+    client.delete(
+        collection_name=COLLECTION,
+        points_selector=FilterSelector(
+            filter=Filter(
+                must=[FieldCondition(key="url", match=MatchValue(value=url))]
+            )
+        ),
+    )

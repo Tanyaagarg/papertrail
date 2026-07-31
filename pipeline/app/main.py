@@ -9,6 +9,7 @@ from app.db import snapshots
 from app.explain import explain_changes
 from fastapi.middleware.cors import CORSMiddleware
 from app.explain import explain_changes, summarize_clauses
+from app.vectors import index_clauses, compute_diff, purge_url
 
 app = FastAPI(title="PaperTrail Pipeline")
 
@@ -284,3 +285,14 @@ def check(payload: CheckRequest):
         "added_or_changed": added,
         "removed": removed,
     }
+
+class PurgeRequest(BaseModel):
+    url: str
+
+
+@app.post("/purge")
+def purge(payload: PurgeRequest):
+    """Delete all snapshots + vectors for a URL (used when a page is removed)."""
+    snap_result = snapshots.delete_many({"url": payload.url})
+    purge_url(payload.url)
+    return {"url": payload.url, "snapshots_deleted": snap_result.deleted_count}
