@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { prisma } from "./lib/prisma";
+import { crawlQueue } from "./lib/queue";
 
 const app = express();
 app.use(cors());
@@ -130,4 +131,23 @@ app.get("/users/:userId/profile", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
+});
+
+// Queue a crawl job for each of a user's watched pages.
+app.post("/users/:userId/crawl", async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (Number.isNaN(userId)) {
+    return res.status(400).json({ error: "userId must be a number" });
+  }
+
+  const sources = await prisma.watchedSource.findMany({ where: { userId } });
+  for (const source of sources) {
+    await crawlQueue.add("check-source", {
+      sourceId: source.id,
+      url: source.url,
+      userId,
+    });
+  }
+
+  return res.json({ queued: sources.length });
 });

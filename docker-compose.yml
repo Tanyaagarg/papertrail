@@ -32,7 +32,17 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  redis:
+    image: redis:7
+    container_name: papertrail-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
 volumes:
   mysql_data:
   mongo_data:
   qdrant_data:
+  redis_data:
