@@ -1,0 +1,14 @@
+name: Scheduled crawl
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # every day at 06:00 UTC
+  workflow_dispatch: {} # also lets you run it manually from the Actions tab
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the crawl for user 1
+        run: |
+          curl -fsS -X POST "${{ secrets.CRAWL_URL }}/users/1/crawl"
