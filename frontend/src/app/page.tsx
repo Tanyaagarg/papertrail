@@ -13,12 +13,12 @@ type Source = {
   createdAt: string;
 };
 
-// The result of checking one page for changes.
 type CheckResult = {
   loading?: boolean;
   error?: string;
+  status?: "first" | "no_change" | "changed";
+  summary?: string;
   explanation?: string | null;
-  message?: string;
 };
 
 export default function Home() {
@@ -27,13 +27,11 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<string>("");
 
-  // Form state
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Per-card check results, keyed by source id.
   const [checks, setChecks] = useState<Record<number, CheckResult>>({});
 
   async function loadSources() {
@@ -57,7 +55,7 @@ export default function Home() {
         setProfile(data.description ?? "");
       }
     } catch {
-      // No profile yet — that's fine.
+      // no profile yet — fine
     }
   }
 
@@ -91,33 +89,16 @@ export default function Home() {
     }
   }
 
-  // Take a fresh snapshot, then ask the pipeline to explain any changes.
   async function handleCheck(source: Source) {
     setChecks((c) => ({ ...c, [source.id]: { loading: true } }));
     try {
-      // 1) Snapshot the page now (captures the current version).
-      await fetch(`${PIPELINE_URL}/snapshots`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: source.url }),
-      });
-
-      // 2) Ask for a personalized explanation of what changed.
-      const res = await fetch(`${PIPELINE_URL}/explain`, {
+      const res = await fetch(`${PIPELINE_URL}/check`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: source.url, profile }),
       });
       const data = await res.json();
-
-      setChecks((c) => ({
-        ...c,
-        [source.id]: {
-          loading: false,
-          explanation: data.explanation,
-          message: data.message,
-        },
-      }));
+      setChecks((c) => ({ ...c, [source.id]: { loading: false, ...data } }));
     } catch {
       setChecks((c) => ({
         ...c,
@@ -131,7 +112,6 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
-      {/* Top navigation bar */}
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-2">
@@ -144,7 +124,6 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Hero heading */}
       <section className="mx-auto max-w-5xl px-6 pt-10 pb-6">
         <h1 className="text-3xl font-bold tracking-tight">Your change feed</h1>
         <p className="mt-2 text-slate-600">
@@ -152,7 +131,6 @@ export default function Home() {
         </p>
       </section>
 
-      {/* "Watch a new page" form */}
       <section className="mx-auto max-w-5xl px-6 pb-8">
         <form
           onSubmit={handleAdd}
@@ -184,7 +162,6 @@ export default function Home() {
         </form>
       </section>
 
-      {/* The list of watched pages */}
       <section className="mx-auto max-w-5xl px-6 pb-16">
         {loading && <p className="text-sm text-slate-500">Loading…</p>}
 
@@ -214,10 +191,6 @@ export default function Home() {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <h3 className="font-semibold leading-snug">{source.label}</h3>
-                    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-1 text-xs font-medium text-sky-700">
-                      <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
-                      Watching
-                    </span>
                   </div>
                   <p className="mt-1 truncate text-sm text-slate-500">{source.url}</p>
                   <p className="mt-3 text-xs text-slate-400">
@@ -229,16 +202,41 @@ export default function Home() {
                     disabled={check?.loading}
                     className="mt-4 self-start rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-700 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {check?.loading ? "Checking…" : "Check for changes"}
+                    {check?.loading ? "Reading the page…" : "Check for changes"}
                   </button>
 
-                  {/* Result area */}
                   {check?.error && (
                     <p className="mt-3 text-sm text-red-600">{check.error}</p>
                   )}
+
                   {check && !check.loading && !check.error && (
-                    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm leading-relaxed text-slate-700 whitespace-pre-line">
-                      {check.explanation || check.message || "No meaningful changes detected."}
+                    <div className="mt-4 space-y-3">
+                      {check.status === "first" && <StatusPill color="sky" label="📋 Key points" />}
+                      {check.status === "no_change" && (
+                        <StatusPill color="emerald" label="✅ No changes since last check" />
+                      )}
+                      {check.status === "changed" && (
+                        <StatusPill color="amber" label="🔔 Change detected!" />
+                      )}
+
+                      {/* When changed, show the explanation prominently */}
+                      {check.status === "changed" && check.explanation && (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm leading-relaxed text-slate-800 whitespace-pre-line">
+                          {check.explanation}
+                        </div>
+                      )}
+
+                      {/* The page summary (always available) */}
+                      {check.summary && (
+                        <div>
+                          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+                            {check.status === "changed" ? "Current summary" : "Summary of this page"}
+                          </p>
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm leading-relaxed text-slate-700 whitespace-pre-line">
+                            {check.summary}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </article>
@@ -248,5 +246,27 @@ export default function Home() {
         )}
       </section>
     </main>
+  );
+}
+
+// A small colored status label.
+function StatusPill({
+  color,
+  label,
+}: {
+  color: "sky" | "emerald" | "amber";
+  label: string;
+}) {
+  const styles = {
+    sky: "bg-sky-100 text-sky-700",
+    emerald: "bg-emerald-100 text-emerald-700",
+    amber: "bg-amber-100 text-amber-700",
+  }[color];
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${styles}`}
+    >
+      {label}
+    </span>
   );
 }

@@ -43,3 +43,33 @@ Keep it friendly and under 150 words. Do NOT invent clauses that are not listed 
         temperature=0.3,
     )
     return response.choices[0].message.content.strip()
+
+
+def summarize_clauses(clauses: list[str]) -> str:
+    """Ask Groq to summarize the key points of a page's fine print."""
+    if not clauses:
+        return "This page has no readable fine print to summarize."
+
+    # Cap the size so the prompt stays small.
+    joined = "\n".join(f"- {c}" for c in clauses[:60])
+
+    prompt = f"""Here are clauses from a page of fine print (terms, policy, or rules):
+
+{joined}
+
+Summarize the KEY points a normal person should know, as 3-6 short bullet points,
+in plain simple English. Focus on money/fees, cancellation, data & privacy,
+obligations, and anything risky. Keep it under 120 words."""
+
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": "You explain fine print to ordinary people in clear, simple language.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.3,
+    )
+    return response.choices[0].message.content.strip()

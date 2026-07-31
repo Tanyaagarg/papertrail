@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.db import snapshots
 from app.explain import explain_changes
 from fastapi.middleware.cors import CORSMiddleware
+from app.explain import explain_changes, summarize_clauses
 
 app = FastAPI(title="PaperTrail Pipeline")
 
@@ -208,4 +209,78 @@ def explain(payload: ExplainRequest):
         "added_or_changed": added,
         "removed": removed,
         "explanation": explanation,
+    }
+
+
+class CheckRequest(BaseModel):
+    url: str
+    profile: str | None = None
+
+
+@app.post("/check")
+def check(payload: CheckRequest):
+    # 1) Fetch the page now.
+    try:
+        response = httpx.get(payload.url, timeout=20, follow_redirects=True)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Could not fetch that URL")
+
+    # 2) Clean it, split into clauses, save snapshot, index in Qdrant.
+    text = extract_text(response.text)
+    clauses = split_into_clauses(text)
+
+    doc = {
+        "url": payload.url,
+        "fetched_at": datetime.now(timezone.utc),
+        "status_code": response.status_code,
+        "content": response.text,
+        "content_length": len(response.text),
+    }
+    result = snapshots.insert_one(doc)
+    snapshot_id = str(result.inserted_id)
+    if clauses:
+        index_clauses(payload.url, snapshot_id, clauses, embed_texts(clauses))
+
+    # 3) A summary of the page as it is right now (always useful).
+    summary = summarize_clauses(clauses)
+
+    # 4) How many times have we seen this page?
+    count = snapshots.count_documents({"url": payload.url})
+
+    # First time ever → just give the summary (nothing to compare to yet).
+    if count < 2:
+        return {
+            "status": "first",
+            "summary": summary,
+            "explanation": None,
+            "added_or_changed": [],
+            "removed": [],
+        }
+
+    # 5) Compare the two most recent versions.
+    recent = list(
+        snapshots.find({"url": payload.url}).sort("fetched_at", -1).limit(2)
+    )
+    current_id = str(recent[0]["_id"])
+    previous_id = str(recent[1]["_id"])
+    added, removed = compute_diff(current_id, previous_id)
+
+    # Nothing meaningful changed.
+    if not added and not removed:
+        return {
+            "status": "no_change",
+            "summary": summary,
+            "explanation": None,
+            "added_or_changed": [],
+            "removed": [],
+        }
+
+    # Something changed → explain it for this user.
+    explanation = explain_changes(payload.url, payload.profile, added, removed)
+    return {
+        "status": "changed",
+        "summary": summary,
+        "explanation": explanation,
+        "added_or_changed": added,
+        "removed": removed,
     }
